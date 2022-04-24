@@ -1,0 +1,94 @@
+#!groovy
+
+node {
+    pollSCM('* * * * *')
+    checkout scm
+
+    def rivesaltes_factory_instance_ssh = 'ddadmin@azepnl-ap04'
+    def rivesaltes_docker_repository = 'localhost:5000'
+
+    stage('Login to AWS DD') {
+        withEnv(['AWS_DEFAULT_REGION=eu-west-1']) {
+            withCredentials([[$class          : 'UsernamePasswordMultiBinding', credentialsId: 'aws_access',
+                              usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY']]) {
+                sh 'docker login -u AWS -p \
+                   $(aws ecr get-authorization-token --output text --query authorizationData[].authorizationToken \
+                   | base64 -d | cut -d: -f2) \
+                   https://969076149354.dkr.ecr.eu-west-1.amazonaws.com'
+            }
+        }
+    }
+
+    stage('Pull latest image versions') {
+        factory_image = docker.image('969076149354.dkr.ecr.eu-west-1.amazonaws.com/dd/factory:latest')
+        factory_image.pull()
+        db_image = docker.image('969076149354.dkr.ecr.eu-west-1.amazonaws.com/dd/database:latest')
+        db_image.pull()
+    }
+
+    stage('Deploy DAGs') {
+        sh 'make deploy'
+    }
+
+    def factoryImg
+    def dbTest
+    def dbWebTest
+    def webImg
+
+    stage('Build docker images') {
+        parallel(
+                "Factory": {
+                    factoryImg = docker.build(
+                            "rivesaltes/factory",
+                            //"--no-cache=true " +
+                            "-f docker/factory/Dockerfile " +
+                            "./")
+                },
+                "DataDriver Database": {
+                    dbTest = docker.image('969076149354.dkr.ecr.eu-west-1.amazonaws.com/dd/database')
+                }
+        )
+    }
+
+    stage('Testing') {
+        parallel(
+            "Factory": {
+                dbTest.withRun() { c->
+                    factoryImg.inside("--link ${c.id}:dd_database") {
+
+                        stage('Setup Connexion to TestDB') {
+                            // Waiting the database until it's ready
+                            sh 'dockerize -wait tcp://dd_database:5432'
+
+                            withEnv(['AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgres://ddadmin@dd_database:5432/airflow',
+                                     'DD_DATABASE_DEFAULT=postgres://ddadmin@dd_database:5432/datadriver']) {
+                                // setup Datadriver's connexion into airflow meta-database
+                                sh '/opt/datadriver/bin/init_datadriver'
+                            }
+                        }
+
+                        stage('Unit Tests') {
+                            sh 'make unittest'
+                        }
+
+                        stage('Acceptance Tests') {
+                            sh 'make acceptance_test'
+                        }
+                    }
+                }
+            }
+         )
+     }
+
+    stage('Push docker images') {
+        docker.withRegistry('https://969076149354.dkr.ecr.eu-west-1.amazonaws.com/smartgrid/factory') {
+            factoryImg.push("deploy")
+        }
+    }
+
+    stage('Deploy') {
+
+    }
+
+}
+

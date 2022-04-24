@@ -1,0 +1,150 @@
+version: '2.1'
+
+services:
+    celery_broker:
+        image: 'redis:3.2.7'
+        restart: always
+        ports:
+          - "6379"
+
+    dd_database:
+        image: 969076149354.dkr.ecr.eu-west-1.amazonaws.com/dd/database
+        restart: always
+        ports:
+          - "5432"
+        volumes:
+          - ./data:/data
+
+    webserver:
+        build:
+          context: .
+          dockerfile: ./docker/factory/Dockerfile
+        restart: always
+        depends_on:
+            - dd_database
+            - worker
+        environment:
+            - PROJECT_HOME=/opt/datadriver/workspace
+            - WAIT_FOR_DB=dd_database:5432
+            - WAIT_FOR_BROKER=celery_broker:6379
+            - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgres://ddadmin@dd_database:5432/airflow
+            - AIRFLOW__CELERY__BROKER_URL=redis://celery_broker:6379
+            - AIRFLOW__WEBSERVER_WORKERS=4
+            - AIRFLOW__WEBSERVER__WORKER_CLASS=sync
+            - DD_DATABASE_DEFAULT=postgres://ddadmin@dd_database:5432/datadriver
+            - AIRFLOW__CORE__LOAD_EXAMPLES=False
+            - AIRFLOW__WEBSERVER__WEB_SERVER_SSL_CERT=
+            - AIRFLOW__WEBSERVER__WEB_SERVER_SSL_KEY=
+#            - AIRFLOW__CORE__PARALLELISM=8
+#            - AIRFLOW__CORE__CONCURRENCY=8
+#            - AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG=8
+        ports:
+            - "8080:8443"
+        command: webserver
+        links:
+          - dd_database
+        volumes:
+          - ./conf:/conf
+          - ./data:/data
+          - airflowlogs:/var/log/airflow
+          - ./:/opt/datadriver/workspace
+
+    scheduler:
+        build:
+          context: .
+          dockerfile: ./docker/factory/Dockerfile
+        restart: always
+        depends_on:
+            - dd_database
+            - celery_broker
+        environment:
+            - PROJECT_HOME=/opt/datadriver/workspace
+            - WAIT_FOR_DB=dd_database:5432
+            - WAIT_FOR_BROKER=celery_broker:6379
+            - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgres://ddadmin@dd_database:5432/airflow
+            - AIRFLOW__CELERY__BROKER_URL=redis://celery_broker:6379
+            - DD_DATABASE_DEFAULT=postgres://ddadmin@dd_database:5432/datadriver
+            - AIRFLOW__CORE__PARALLELISM=16
+            - AIRFLOW__CORE__CONCURRENCY=16
+            - AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG=16
+            - AIRFLOW__CORE__DAG__CONCURRENCY=16
+        command: scheduler
+        volumes:
+          - ./conf:/conf
+          - ./data:/data
+          - airflowlogs:/var/log/airflow
+          - ./:/opt/datadriver/workspace
+
+    worker:
+        build:
+          context: .
+          dockerfile: ./docker/factory/Dockerfile
+        restart: always
+        depends_on:
+            - dd_database
+            - celery_broker
+        environment:
+            - PROJECT_HOME=/opt/datadriver/workspace
+            - WAIT_FOR_DB=dd_database:5432
+            - WAIT_FOR_BROKER=celery_broker:6379
+            - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgres://ddadmin@dd_database:5432/airflow
+            - AIRFLOW__CELERY__BROKER_URL=redis://celery_broker:6379
+            - DD_DATABASE_DEFAULT=postgres://ddadmin@dd_database:5432/datadriver
+            - AIRFLOW__CELERY__CELERYD_CONCURRENCY=8
+            - AIRFLOW__CORE__PARALLELISM=16
+            - AIRFLOW__CORE__CONCURRENCY=16
+            - AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG=16
+            - AIRFLOW__CORE__DAG__CONCURRENCY=16
+        ports:
+            - "8793"
+              #- "9999:9999"
+        command: worker
+        volumes:
+          - ./data:/data
+          - airflowlogs:/var/log/airflow
+          - ./:/opt/datadriver/workspace
+
+    grafana:
+      image: grafana/grafana:5.1.0
+      restart: always
+      depends_on:
+          - graphite
+      volumes:
+        - ./data/grafana:/var/lib/grafana
+      ports:
+            - "3000:3000"
+
+    graphite:
+      image: graphiteapp/graphite-statsd
+      restart: always
+      volumes:
+        - ./data/datadriver_data/whisper:/opt/graphite/storage/whisper
+      ports:
+            - "80:80"
+            - "2003-2004"
+            - "2023-2024"
+            - "8125/udp"
+            - "8126"
+
+
+
+    lab:
+        build:
+          context: .
+          dockerfile: ./docker/lab/Dockerfile
+        #image: 969076149354.dkr.ecr.eu-west-1.amazonaws.com/dd/lab
+        restart: always
+        depends_on:
+            - dd_database
+        environment:
+            - PROJECT_HOME=/opt/datadriver/workspace
+            - WAIT_FOR_DB=dd_database:5432
+            - DD_DATABASE_DEFAULT=postgres://ddadmin@dd_database:5432/datadriver
+        volumes:
+            - ./:/opt/datadriver/workspace
+        ports:
+            - "8000:8000"
+        command: --datadriver-db=postgres://ddadmin@dd_database:5432/datadriver
+
+volumes:
+  airflowlogs: {}

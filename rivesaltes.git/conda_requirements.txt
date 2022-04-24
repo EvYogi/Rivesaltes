@@ -1,0 +1,23 @@
+# Everything needed in production
+
+pytest
+h5py
+boto3
+boto
+Pillow
+whisper
+cryptography
+numpy
+scipy
+pandas #solar angles
+deap #genetic algorithm
+xlrd
+nbconvert
+matplotlib
+ipywidgets
+jupyter_contrib_nbextensions
+jupyter_nbextensions_configurator
+sphinx
+sphinx_bootstrap_theme
+nbsphinx
+sphinx-gallery
